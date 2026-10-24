@@ -1,0 +1,36 @@
+---
+description: Module filenames name the concept, readable without their directory
+globs: src/**/*.py
+alwaysApply: false
+---
+
+# File naming
+
+A filename must identify what is in the file on its own, without the directory as context. Grep
+output, tracebacks and editor tabs all show the basename alone, and a tree full of `service.py`,
+`client.py` and `config.py` is unreadable in all three.
+
+```
+GOOD  services/github/github_adapter.py     logger/log_manager.py
+BAD   services/github/adapter.py            logger/manager.py
+```
+
+- `snake_case`. A hyphenated module cannot be imported.
+- Repeat the concept even when the directory already states it. The redundancy costs nothing and
+  the basename has to stand alone.
+- No catch-all modules: `utils.py`, `helpers.py`, `common.py`, `misc.py`. If nothing more specific
+  fits, the contents do not belong together.
+- One primary export, named after the file: `log_manager.py` exports `LogManager`,
+  `cancel_on_sigterm.py` exports `cancel_on_sigterm`.
+
+## Directory layout
+
+Clients, services, and models keep a subdirectory per resource or domain from the start. A
+client is `clients/<resource>/<resource>_client.py` (`clients/github/github_client.py`). A
+use case is `*_service.py` / `*_adapter.py` / `*_writer.py` plus `*_errors.py`. A domain
+accumulates schemas (`models/github/github_repo_info.py`). Nesting never shortens a
+filename. The basename still has to stand alone.
+
+Cross-cutting packages (`config/`, `logger/`, `distribution/`), `lifecycle/`, and
+`task_runner/` stay flat: sibling modules, one concept each. Nest one only when a single concept
+grows a second module.

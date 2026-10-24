@@ -1,0 +1,34 @@
+---
+description: Zero global state. Only lifecycle and main construct the graph.
+alwaysApply: true
+---
+
+# Invariants
+
+`lifecycle/` is the composition root. `main.py` constructs `AppConfig` and `LifecycleManager` only,
+then awaits `task_runner.run()` inside `async with lifecycle.create_task_runner() as task_runner`.
+Business logic never goes into `main.py`: it goes into a service, and its order into `TaskRunner`.
+
+In `src/app/` except `lifecycle/` and `main.py`: never construct `AppConfig`, clients, services,
+`TaskRunner`, or `LogManager`. Declare them on `__init__`.
+
+No module-level I/O objects or `structlog.configure()`. Process-wide hooks (`sys.excepthook`, the
+root stdlib logger, signal handlers, the loop exception handler) are installed only by
+`LifecycleManager`.
+
+`LifecycleManager.__init__` does not gain a parameter per setting. A deployment value belongs on
+its config model; the composition root reads `app_config` and passes that value down. The
+constructor seams that are not settings are the log `stream` and client test doubles such as
+`github`.
+
+```python
+# BAD - the service constructs its dependency
+class GithubAdapter:
+    def __init__(self, config: GithubReportConfig) -> None:
+        self._github = GithubClient(config)
+
+# GOOD - injected
+class GithubAdapter:
+    def __init__(self, github_client: GithubClient) -> None:
+        self._github_client = github_client
+```

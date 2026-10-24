@@ -1,0 +1,135 @@
+[project]
+name = "task-runner-template"
+version = "1.0.0"
+description = "Python task-runner template for a scoped job that talks to async resources, which may include databases, blob storage, or message brokers: async client lifecycle, structured logging, and config, with the task written in TaskRunner.run()."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+dependencies = [
+    "aiofiles~=25.1.0",
+    "githubkit~=0.16.1",
+    "pydantic~=2.14.1",
+    "pydantic-settings~=2.16.1",
+    "structlog~=26.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ori88c-python-templates/task-runner-template"
+Repository = "https://github.com/ori88c-python-templates/task-runner-template"
+Issues = "https://github.com/ori88c-python-templates/task-runner-template/issues"
+
+[project.scripts]
+app = "app.main:main"
+
+[dependency-groups]
+dev = [
+    "httpx~=0.28.1",
+    "import-linter~=2.15.0",
+    "pre-commit~=4.7.0",
+    "pyright~=1.1.414",
+    "pytest~=9.1.1",
+    "pytest-asyncio~=1.4.0",
+    "ruff~=0.17.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.9,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: a service against a real external store",
+    "e2e: the whole process, from main to exit code",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+# target-version is inferred from project.requires-python.
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+    "F", "E", "W",        # pyflakes, pycodestyle
+    "I",                  # isort
+    "N",                  # pep8-naming
+    "D",                  # pydocstyle
+    "UP",                 # pyupgrade
+    "ANN",                # flake8-annotations
+    "S",                  # flake8-bandit
+    "B",                  # flake8-bugbear
+    "A",                  # flake8-builtins
+    "C4",                 # flake8-comprehensions
+    "DTZ",                # flake8-datetimez
+    "T20",                # flake8-print
+    "PT",                 # flake8-pytest-style
+    "RET", "SIM", "ARG",  # returns, simplify, unused arguments
+    "PTH",                # use pathlib
+    "ERA",                # commented-out code
+    "PL", "TRY", "RUF",
+]
+# Deliberately not selected: Q and COM conflict with the formatter; TC moves annotations into
+# TYPE_CHECKING blocks, which breaks Pydantic's runtime evaluation of them; EM forces every
+# exception message into a temporary variable.
+ignore = [
+    "ANN401",  # Any is legitimate for **kwargs forwarded to json.dumps
+    "TRY003",  # long, specific exception messages are worth more than the rule
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# Config models use ALL_CAPS members by convention, including assembled-DSN properties.
+"src/app/config/*.py" = ["N802"]
+# Tests assert, shell out to a real interpreter, compare against literals, raise inline to
+# produce a genuine traceback rather than abstracting the raise away (TRY301), and pass
+# fake tokens into constructors (S106).
+"tests/**/*.py" = ["S101", "S106", "S603", "PLR2004", "TRY301"]
+
+[tool.pyright]
+pythonVersion = "3.14"
+include = ["src", "tests"]
+# "." puts the repo root on the path so the `tests` package resolves; "src" does the same for `app`.
+extraPaths = ["src", "."]
+venvPath = "."
+venv = ".venv"
+# Strict applies to tests too. Relaxing them to "standard" was the plan, but an
+# executionEnvironments block cannot override typeCheckingMode, and the tests pass strict as
+# written, so the exemption would buy nothing.
+typeCheckingMode = "strict"
+reportMissingTypeStubs = true
+
+[tool.importlinter]
+root_package = "app"
+
+[[tool.importlinter.contracts]]
+name = "The app is a one-directional stack"
+type = "layers"
+exhaustive = true
+containers = ["app"]
+layers = [
+    "main",                   # process entry point, awaits TaskRunner.run()
+    "lifecycle",              # composition root, builds every layer below
+    "task_runner",            # orchestrates the run on top of AppServices
+    "state",                  # typed AppState; AppServices is what TaskRunner receives
+    "services",               # business logic
+    "clients",                # data access
+    "models",                 # cross-cutting, depend on nothing
+    "logger",                 # cross-cutting
+    "distribution",           # installed dist that provides app; logger stamps the version
+    "config",
+]

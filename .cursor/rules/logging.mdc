@@ -1,0 +1,71 @@
+---
+description: Loggers are injected, never global. Third-party stdlib logs go through the bridge.
+globs: **/*.py
+alwaysApply: false
+---
+
+# Logging
+
+## Injected loggers
+
+Every component receives its own named child logger through its constructor.
+
+```python
+# BAD - module-level logger
+log = structlog.get_logger()
+
+class UsersService:
+    def create(self, email: str) -> None:
+        log.info("user.created", email=email)
+```
+
+```python
+# GOOD - injected
+class UsersService:
+    def __init__(self, logger: FilteringBoundLogger) -> None:  # structlog.typing
+        self._logger = logger
+
+    def create(self, email: str) -> None:
+        self._logger.info("user.created", email=email)
+
+# composition root, once per run
+users_service = UsersService(log_manager.get_child_logger("UsersService"))
+```
+
+## Run-scoped fields
+
+A field that holds for a stretch of the run (the batch being processed, the current item) is
+bound once with `structlog.contextvars.bound_contextvars` in a `with` block around that work.
+`LogManager` merges contextvars, so the service and client loggers inside the block pick it up.
+Do not pass the same id on each `info()`.
+
+## Forbidden setup
+
+Never: `structlog.configure()`, `logging.getLogger(__name__)` for the app's own logging, a
+module-level logger, or a component constructing its own `LogManager`. `bound_contextvars` is
+allowed: it writes task-scoped fields and the `with` block unbinds them. `configure()` is the
+process-wide pipeline setup that stays forbidden. Do not log `env`, `app`, `instance`, or
+`app.version` as call-site kwargs; the manager stamps them.
+
+## Third-party libraries
+
+SDKs log through stdlib `logging`. `LifecycleManager.install_process_logging()` (called from
+`main`) puts `StdlibLogHandler` on the root logger at `WARNING`, so those records come out as
+JSON with `context="stdlib"` and `stdlib_logger` naming the library's logger. To hear more from
+one library, raise that library's named logger in `install_process_logging`. Never lower the
+root, and never attach another handler.
+
+## Uncaught errors
+
+Uncaught errors are `LogManager` children, not a `try` / `except` around the run:
+`sys.excepthook` (installed from `main`; logs an exception that escapes the run, after teardown)
+and `asyncio` (the loop exception handler, scoped to `create_task_runner`). Details:
+`src/app/logger/README.md`.
+
+## Log call style
+
+- Message is a short lowercase dotted event name (`"github.search.completed"`), never an f-string.
+  Everything variable goes in kwargs so it stays queryable.
+- Never log a `SecretStr`, a `.get_secret_value()` result, or an assembled DSN.
+- Use `.exception(...)` inside `except` to attach the traceback. Uncaught hooks use
+  `.error(..., exc_info=exc)` because they are not inside the original `except`.

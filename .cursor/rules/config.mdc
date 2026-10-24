@@ -1,0 +1,29 @@
+---
+description: Config fields match env names; durations are ints with a unit suffix
+globs: src/app/config/**/*.py
+alwaysApply: false
+---
+
+# Configuration
+
+Resource models use `ALL_CAPS` fields that match env leaves (`GITHUB_REPORT__ORG_URL`).
+
+A duration, timeout, or TTL is an `int` whose name ends in `_SECONDS` or `_MS` for the unit the
+downstream API actually takes. Do not use `timedelta`, and do not convert under the hood (no
+seconds-to-ms multiply).
+
+```python
+# BAD - unit living only in a comment, then converted
+REQUEST_TIMEOUT: timedelta = Field(default=timedelta(seconds=5))
+# later: int(timeout.total_seconds() * 1000)
+
+# GOOD - the name is the unit the consumer wants
+CONNECT_TIMEOUT_SECONDS: int = Field(default=5, ge=1)  # a socket timeout taken in seconds
+REQUEST_TIMEOUT_MS: int = Field(default=5000, ge=1)  # an SDK option taken in milliseconds
+```
+
+Read the client library's signature and pick its unit, not a common one.
+
+A filesystem path is a `str` checked for shape, not for existence. A `@property` returns the
+`Path` the consumer uses. `OUTPUT_DIR_PATH` is only the directory; `REPORT_PATH` adds the dated
+CSV name. A directory that does not exist yet is still valid.

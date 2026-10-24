@@ -1,0 +1,76 @@
+---
+description: Test layout and the ban on monkeypatching
+globs: tests/**/*.py
+alwaysApply: false
+---
+
+# Tests
+
+## Layout
+
+Unit tests live under `tests/unit/`, integration tests under `tests/integration/`,
+end-to-end tests under `tests/e2e/`. Within each tree, layout mirrors `src/app/`:
+one directory per package (`config/`, `lifecycle/`, `task_runner/`, `services/`, `clients/`,
+`logger/`, `distribution/`, …), then one directory per component under test, then one file
+per feature, named after that feature. Splitting by feature keeps files short and
+makes a failure name the broken behaviour before you open anything. Never let one
+file accumulate every test for a component.
+
+Integration is a client or service against a real external store or API, not an
+in-process double. End-to-end is the whole process: `python -m app.main` in a subprocess,
+asserting on its exit code, JSON lines, and the CSV file. Both trees have a GitHub case
+and need a network. `tests/conftest.py` marks both trees with their name.
+
+Shared fixtures go in the nearest `conftest.py`. `sink` and `log_manager` live in
+`tests/conftest.py`. Read a `sink` back with `tests/log_records.py` (`read_records`,
+`read_messages`) rather than a local copy. Build config with
+`tests/load_app_config.py`, which never reads the working directory's `.env`; never call
+`AppConfig()` in a test. Lifecycle tests build `LifecycleManager(load_app_config(env_file),
+stream=sink, github=mock_github().github)` and enter `create_task_runner()` directly.
+`GITHUB_REPORT__OUTPUT_DIR_PATH` in that env file points at a temp directory. The mock SDK is
+the client test double: the manager still constructs `GithubClient` with its own child logger.
+They never call
+`install_process_logging()`, which replaces process-wide hooks. A test that does install a
+process-wide hook (the stdlib bridge) restores it afterwards. `TaskRunner` tests build it from
+`AppServices` of `AsyncMock(spec=...)` services and assert on the order and arguments it used.
+
+## No monkeypatching
+
+`monkeypatch`, `unittest.mock.patch`, and reassigning module or instance attributes are
+forbidden. Patching is a smell that dependency injection is missing: either the code
+under test reaches for **global state** (module logger, `sys.stdout`, a module-level client),
+or the test **overrides a private** (`service._client = …`) that should have been an
+`__init__` argument. Fix the production constructor; do not patch around it.
+
+Fixtures are the test composition root: construct dependencies and pass them in.
+
+```python
+# BAD - hidden global
+monkeypatch.setattr(sys, "stdout", fake)
+
+# GOOD - inject the stream
+manager = LogManager(config, env=Environment.DEV, app_version="0.1.0", stream=io.BytesIO())
+
+# BAD - private that belongs on __init__
+adapter._github_client = fake_github
+monkeypatch.setattr(adapter, "_github_client", fake_github)
+
+# GOOD - inject the dependencies
+adapter = GithubAdapter(logger=logger, github_client=fake_github)
+```
+
+Injecting a dependency is fine: a buffer, a temp file, an in-memory implementation, or an
+`AsyncMock` constructed and handed to the component. That is dependency injection, not
+patching. `AsyncMock(spec=GithubClient)` passed to a service is allowed;
+`patch("app.clients.github...")` is not.
+
+## Assertions
+
+Assert on real observable output, not on whether a mock was called. A mock of the thing under test
+proves only that the test matches the implementation.
+
+An orchestrator is the exception: its observable output is the calls it makes. Test `TaskRunner`
+by asserting on the order and arguments recorded by the `AsyncMock(spec=...)` services it
+receives (plus what it logs), never on a mock of `TaskRunner` itself.
+
+Name tests as a sentence stating the guarantee: `test_records_below_the_minimum_level_are_dropped`.

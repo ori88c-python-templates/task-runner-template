@@ -1,0 +1,82 @@
+---
+description: Orchestrator, services, clients; imports point down, the import graph is a DAG
+globs: src/**/*.py
+alwaysApply: false
+---
+
+# Architecture
+
+## Layers
+
+Imports point down, never up.
+
+```
+main.py                 Entry point    awaits TaskRunner.run() inside create_task_runner()
+   |
+lifecycle/              Composition    builds and starts AppState, yields TaskRunner, tears down
+   |
+task_runner/            Orchestration  which services run, in which order
+   |
+state/                  App state      typed AppState; TaskRunner receives AppServices only
+   |
+services/               Service        business logic
+   |
+clients/                Data access    databases, queues, external APIs, SDKs
+```
+
+`TaskRunner` calls a service; a service calls a client. `main.py` never changes: new business
+logic is a service plus a step in `TaskRunner.run()`. `TaskRunner` stays thin — data
+transformation, retries, loops over records, or I/O there means a service is missing. A client
+knows nothing above it — a client importing a service, or reading `AppState`, is the canonical
+violation.
+
+`lifecycle/` is the composition root and is the one package allowed to import every layer.
+`state/` sits below `task_runner/` so the runner can import `AppServices` without importing
+`lifecycle/` (that would be an upward import). `models/`, `config/`, `logger/` and
+`distribution/` are cross-cutting: any layer may import them, they import no layer.
+`distribution/` sits below `logger/` because the composition root looks up
+`installed_app_version` and injects it; `LogManager` only stamps the string. The log `app`
+identity (`APP_NAME`) lives in `config/app_consts.py`.
+
+Check the direction before adding an import. If a lower layer needs something from a higher one,
+the design is wrong: move the shared piece down, or pass it in through the constructor.
+
+## SDK context managers
+
+Some SDKs only keep their connection open inside ``async with client``. Do not put that block
+inside ``start()``: leaving ``start`` would close it before the run. Enter it with
+``AsyncExitStack.enter_async_context`` in ``start``, and ``aclose`` the stack in ``stop``.
+An empty stack closes nothing, so ``stop`` stays safe when ``start`` never ran.
+
+## Loose coupling
+
+Services do not call each other. `TaskRunner` passes `list[GithubRepoInfo]` from
+`GithubAdapter.get_popular_repos()` to `CsvReportWriter.write()`. The shared type lives in
+`models/`.
+
+## Cycles
+
+Never break a cycle with a function-local or `TYPE_CHECKING` import — both hide the problem.
+
+The import graph must stay a DAG. Python tolerates cycles; this codebase does not.
+`uv run lint-imports` enforces this from the contracts in `pyproject.toml`. It only sees
+directory-sized layers: two modules in the same package that import each other still pass it
+and are still a cycle. Packages listed with `|` on one layer are siblings it checks against each
+other. Everything else at one level is the developer's job — move the shared type down, or
+inject the dependency from the composition root.
+
+## Public barrels
+
+A package's `__init__.py` re-exports its public types so callers write
+`from app.state import AppState` rather than a leaf path. Modules *inside* that
+package still import siblings by module path (`from app.state.app_state import AppState`).
+Importing the package from one of its own modules is a cycle: the `__init__` is already
+loading that module.
+
+When you add a type, decide in the same change whether it belongs on that package's
+`__all__`. Barrel what other packages import. Leave internals, `_`-prefixed names, and
+implementation details off. The package `__init__.py` `__all__` is the source of truth.
+
+A later `GithubAdapter` that is only imported as
+`from app.services.github.github_adapter import GithubAdapter` is an incomplete addition:
+`app.services` must re-export it too.
